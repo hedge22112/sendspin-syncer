@@ -100,11 +100,11 @@ We still keep the idea of a "unique tone per player", but shape it:
 
 ```
 src/sendspin_syncer/
-  cli.py          # entrypoint: `list` and `measure`
+  cli.py          # entrypoint: `list`, `devices` and `measure`
   server.py       # SendspinServer lifecycle, identity, discovery, connect, clean hand-back
   signals.py      # chirp generation, band allocation, schedule
   playback.py     # PushStream per-player channels, timed commit at play_start_us
-  capture.py      # sounddevice InputStream → buffer with timestamps
+  capture.py      # input device listing/selection; sounddevice InputStream → buffer with timestamps
   clock_map.py    # map mic sample index ↔ server clock (monotonic) time
   analysis.py     # band-pass + matched filter, peak picking, SNR, stats
   report.py       # table / JSON / CSV output
@@ -118,12 +118,27 @@ tests/
 connection state, current `output_delay_ms`, and whether it is playing. It
 connects without the `playback` activity, so it doesn't displace MA.
 
+**`devices`**: lists the audio input devices on this machine, with index,
+name, host API (ALSA/PulseAudio/CoreAudio/WASAPI…), input channel count,
+default sample rate, and which one is the system default. A quick
+`--check` option records 2 s from a device and shows its level, so you can
+make sure you picked the right mic.
+
+**Choosing the mic:** `measure --device <index|name>`. Partial,
+case-insensitive name matches are allowed; if a name matches more than one
+device, the tool stops and lists the matches. `--channel N` picks one channel
+of a multi-channel interface. Without `--device`, the system default input is
+used and its name is printed at the start of the run. The device and its
+sample rate are saved in the JSON report. If the device can't do 48 kHz, the
+tool records at the device's native rate and resamples the reference signal
+to match.
+
 **`measure`** flow:
 1. Start the server, discover players (or filter with `--player`), confirm
    with the user, and connect with the `playback` activity.
 2. Put the chosen players into one temporary group (in our server only; MA's
    groups aren't touched).
-3. Start mic capture and record mic stream time against `server.clock` (sample
+3. Open the selected input device (see above), start mic capture, and record mic stream time against `server.clock` (sample
    index ↔ µs) using the sounddevice callback's `inputBufferAdcTime`.
 4. Build the schedule and push per-channel PCM (silence plus the test signal)
    with `play_start_us = now + lead_time` (lead time above each player's
@@ -158,9 +173,10 @@ only and is never sent to players. It can be turned off with `--no-hints`.
 - **M3 – Playback + hand-back.** Play a scheduled test signal on one player,
   then on several with per-player channels. Check that each player type goes
   back to MA afterwards.
-- **M4 – Capture and measure.** Mic capture, clock mapping, the full `measure`
+- **M4 – Capture and measure.** `devices` command and `--device` /
+  `--channel` selection, mic capture, clock mapping, the full `measure`
   pipeline, and the report with JSON/CSV output.
-- **M5 – Polish.** Mic distance correction, `--device` for mic selection,
+- **M5 – Polish.** Mic distance correction,
   optional loopback calibration for absolute latency, packaging
   (`pyproject.toml`, `uv`), README, CI (ruff + pytest).
 
