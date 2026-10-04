@@ -13,8 +13,10 @@ from __future__ import annotations
 import itertools
 import random
 from dataclasses import dataclass, field
+from math import gcd
 
 import numpy as np
+from scipy import signal
 
 DEFAULT_SAMPLE_RATE = 48_000
 
@@ -53,6 +55,25 @@ class ChirpSpec:
         sig[:fade_n] *= ramp
         sig[-fade_n:] *= ramp[::-1]
         return (self.amplitude * sig).astype(np.float32)
+
+    def render_at(self, sample_rate: int) -> np.ndarray:
+        """The chirp as a microphone running at ``sample_rate`` would capture it.
+
+        A low-rate mic (e.g. a 16 kHz webcam) can't record the top of the
+        sweep. Its anti-aliasing filter removes that part, so the template does
+        the same: render at a high rate, then resample with a low-pass.
+        """
+        if self.f1 < 0.45 * sample_rate:
+            return self.render(sample_rate)
+        hi_rate = 48_000 if self.f1 < 0.45 * 48_000 else 96_000
+        g = gcd(sample_rate, hi_rate)
+        out = signal.resample_poly(self.render(hi_rate), sample_rate // g, hi_rate // g)
+        return out.astype(np.float32)
+
+
+def top_frequency_for(mic_rate: int, preferred: float = 12_000.0) -> float:
+    """Highest chirp frequency a mic at ``mic_rate`` can still record cleanly."""
+    return min(preferred, 0.42 * mic_rate)
 
 
 def allocate_bands(

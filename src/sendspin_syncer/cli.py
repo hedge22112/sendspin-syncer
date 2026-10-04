@@ -21,12 +21,13 @@ from .capture import (
     SoundDeviceRecorder,
     check_level,
     list_input_devices,
+    pick_sample_rate,
     resolve_device,
 )
 from .discovery import DiscoveredPlayer, discover_players, select_players
 from .report import build_report, print_report, write_csv, write_json
 from .session import MeasurementSession, PlayerInfo
-from .signals import ScheduleOptions, build_schedule
+from .signals import ScheduleOptions, build_schedule, top_frequency_for
 
 console = Console()
 err = Console(stderr=True)
@@ -185,7 +186,18 @@ async def _measure(args: argparse.Namespace) -> int:
         console.print("Cancelled.")
         return 1
 
+    # Open the mic settings before taking any player over, so a bad device
+    # fails early. A low-rate mic can't hear high frequencies, so the chirps
+    # are kept within what it can record.
+    recorder_rate = pick_sample_rate(device, args.channel)
+    f_hi = top_frequency_for(recorder_rate)
+    if f_hi < 12_000:
+        console.print(
+            f"[yellow]Note:[/] the microphone records at {recorder_rate} Hz, so the test sweeps "
+            f"stop at {f_hi / 1000:.1f} kHz. That's fine, just slightly less precise."
+        )
     sched_opts = ScheduleOptions(
+        f_hi=f_hi,
         repeats=args.repeats,
         simultaneous=args.simultaneous,
         max_early_s=args.max_early_ms / 1000,
@@ -206,7 +218,9 @@ async def _measure(args: argparse.Namespace) -> int:
             err.print("[red]Could not use any player.[/]")
             return 1
         schedule = build_schedule([p.target.client_id_hint for p in ready], sched_opts)
-        recorder = SoundDeviceRecorder(device, session.now_us, channel=args.channel)
+        recorder = SoundDeviceRecorder(
+            device, session.now_us, channel=args.channel, sample_rate=recorder_rate
+        )
         with Progress(
             TextColumn("Playing test signals"), BarColumn(), console=console, transient=True
         ) as prog:

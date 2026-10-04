@@ -87,7 +87,7 @@ def detect_chirp(
     Returns the sub-sample index (in ``recording``) where the chirp begins, or
     ``None`` if the window is outside the recording.
     """
-    template = chirp.render(sample_rate).astype(np.float64)
+    template = chirp.render_at(sample_rate).astype(np.float64)
     pad = len(template)
     seg_start = max(0, window_start)
     seg_end = min(len(recording), window_end + pad)

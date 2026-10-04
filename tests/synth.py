@@ -42,7 +42,7 @@ def render_recording(
         g = (gains or {}).get(pid, 0.3)
         ir = room_impulse(mic_rate, rng) if reverb else np.array([1.0])
         for em in schedule.for_player(pid):
-            chirp = em.chirp.render(mic_rate).astype(np.float64)
+            chirp = em.chirp.render_at(mic_rate).astype(np.float64)
             if drift_ppm:
                 chirp = sps.resample(chirp, round(len(chirp) * ratio))
             sound = np.convolve(chirp, ir) * g

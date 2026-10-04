@@ -3,7 +3,7 @@ import pytest
 
 from sendspin_syncer.analysis import AnalysisOptions, analyse
 from sendspin_syncer.clock_map import ClockMap
-from sendspin_syncer.signals import ScheduleOptions, build_schedule
+from sendspin_syncer.signals import ScheduleOptions, build_schedule, top_frequency_for
 
 from .synth import render_recording
 
@@ -37,6 +37,20 @@ def test_mic_at_44k1():
     res = run(sched, delays, mic_rate=44_100)
     for pid, d in delays.items():
         assert res[pid].median_ms == pytest.approx(d, abs=0.1)
+
+
+@pytest.mark.parametrize("simultaneous", [False, True])
+def test_low_rate_webcam_mic(simultaneous):
+    """A 16 kHz mic hears only the bottom of a full-band sweep."""
+    delays = {"a": 10.0, "b": 47.3, "c": 3.2}
+    for f_hi in (12_000, top_frequency_for(16_000)):
+        if simultaneous and f_hi == 12_000:
+            continue  # bands above 8 kHz are inaudible to this mic; the CLI avoids that
+        opts = ScheduleOptions(repeats=3, seed=5, simultaneous=simultaneous, f_hi=f_hi)
+        sched = build_schedule(list(delays), opts)
+        res = run(sched, delays, mic_rate=16_000)
+        for pid, d in delays.items():
+            assert res[pid].median_ms == pytest.approx(d, abs=0.3), (pid, f_hi)
 
 
 def test_silent_player_reports_no_signal():

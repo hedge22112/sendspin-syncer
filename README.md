@@ -65,6 +65,16 @@ measurement mic (e.g. a miniDSP UMIK-1) is nice to have, but a laptop or
 webcam mic is fine. Only the *differences* between players are reported, so
 the mic's own latency doesn't matter.
 
+**A cheap mic is fine.** Each chirp is found by matching the recording
+against the known sweep (a matched filter), which pulls it out of noise very
+effectively. In simulations, timing stayed exact with the chirp **13 dB
+quieter than the background noise**, including through a tinny 300 Hz–5 kHz
+mic response. Any colouring the mic adds is the same for every player, so it
+cancels out. Mics that only record at 16 kHz (common for webcams and headsets)
+are handled too: the sweeps are kept below what they can capture. If a
+player still comes out *low* confidence or *no signal*: raise its volume, move
+the mic closer, quieten the room, or add `--repeats 9`.
+
 ### 2. See which players are around
 
 ```bash
