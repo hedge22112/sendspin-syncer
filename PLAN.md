@@ -43,8 +43,10 @@ Per the spec ("Multiple servers, server-initiated"):
 How the tool handles this:
 
 1. **Don't run during playback.** Before measuring, warn and ask for
-   confirmation. Players that are currently playing are skipped unless
-   `--force` is given.
+   confirmation (`-y` skips the prompt). *(Built differently from the first
+   draft: a player's playing state can't be seen without connecting to it,
+   which already takes it from MA, so there is no "skip playing players"
+   option.)*
 2. Use a **stable server identity**, stored in
    `~/.config/sendspin-syncer/identity`, so every run is one consistent server
    and not a new unknown server each time.
@@ -159,11 +161,27 @@ runs):
 | Living room (AVR) | 0 ms | +87.4 ms | 0.6 ms | high |
 | Bedroom (Pi) | 20 ms | +12.1 ms | 0.4 ms | medium |
 
-The report also adds an informational line: "to align, add X ms of output
-delay in MA to every player except the latest". This text is for the user
-only and is never sent to players. It can be turned off with `--no-hints`.
+The report also adds informational suggestions for lining the players up.
+*(Corrected from the first draft:)* per the spec, a player's output delay
+makes it play **earlier**, to cancel delay after its audio port. So the
+earliest player keeps its setting, and each later player is shown
+"current + how late it is". This text is for the user only and is never sent
+to players. It can be turned off with `--no-hints`.
 
 ## 6. Milestones
+
+**Status: all milestones implemented.** What's still left is running it
+against your real players and microphone. In addition to the original plan:
+
+- `selftest`: simulated players plus a virtual microphone, to check an
+  install without hardware.
+- End-to-end tests run the real server code against simulated spec-1.0
+  players, a real pre-1.0 unencrypted player (aiosendspin 6.x in a
+  subprocess), and a stand-in Music Assistant that loses the player to the
+  tool and then reclaims it.
+- A silent lead-in of 2 s and a 3 s clock-sync settle period. In testing, the
+  first chirp of a fresh stream was off by ~0.8 ms before these were added.
+
 
 - **M1 – Offline core.** `signals.py` + `analysis.py`, with synthetic tests
   (known delays ±0.1 ms, noise, reverb, multiple players at once). No network

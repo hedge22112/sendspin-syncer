@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install PortAudio
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - name: Install
+        run: |
+          uv venv -p ${{ matrix.python-version }}
+          uv pip install -e ".[test]"
+          uv venv -p 3.12 .venv-legacy
+          VIRTUAL_ENV=.venv-legacy uv pip install "aiosendspin~=6.0.1" numpy
+      - name: Lint
+        run: |
+          .venv/bin/ruff check src tests
+          .venv/bin/ruff format --check src tests
+      - name: Test
+        env:
+          SENDSPIN_LEGACY_PYTHON: .venv-legacy/bin/python
+        run: .venv/bin/pytest -q
