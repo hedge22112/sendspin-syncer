@@ -76,3 +76,15 @@ def test_dropouts_do_not_shift_the_timeline(adc_usable, drop_every):
         # A chirp that falls into a gap can be lost; the rest must be right.
         assert r.detected_count >= 3, pid
         assert r.median_ms == pytest.approx(d, abs=tol), pid
+
+
+def test_report_says_when_clock_drift_could_not_be_measured():
+    """Implausible timing falls back to the nominal rate, and says so."""
+    from sendspin_syncer.clock_map import ClockMap
+
+    n = np.arange(0, 48_000 * 10, 1024)
+    bad = ClockMap.fit(n, n * (1e6 / 48_000) * 1.01, 48_000)  # 1 % off: nonsense
+    assert not bad.fitted and bad.drift_ppm == 0
+    assert bad.raw_drift_ppm == pytest.approx(-9901, abs=5)
+    good = ClockMap.fit(n, n * (1e6 / 48_000) / (1 + 120e-6), 48_000)
+    assert good.fitted and good.drift_ppm == pytest.approx(120, abs=1)

@@ -432,15 +432,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # -v shows every chirp's result; -vv adds debug logging.
     logging.basicConfig(
-        level=[logging.WARNING, logging.INFO, logging.DEBUG][min(args.verbose, 2)],
+        level=logging.DEBUG if args.verbose >= 2 else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
     if args.verbose < 2:
-        # The protocol library is chatty about expected events (e.g. goodbyes).
-        logging.getLogger("aiosendspin").setLevel(
-            logging.ERROR if not args.verbose else logging.INFO
-        )
+        # The protocol library is chatty about expected things, such as older
+        # players speaking a pre-1.0 protocol; only show that with -vv.
+        logging.getLogger("aiosendspin").setLevel(logging.ERROR)
     try:
         return int(args.func(args) or 0)
     except DeviceError as e:

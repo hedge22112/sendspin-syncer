@@ -25,6 +25,10 @@ class ClockMap:
     nominal_rate: int
     jitter_us: float = 0.0
     observations: int = 0
+    fitted: bool = False
+    """Whether the rate was measured; if not, the nominal rate is assumed."""
+    raw_drift_ppm: float | None = None
+    """The drift the timing data suggested, even if it was rejected."""
 
     @property
     def effective_rate(self) -> float:
@@ -63,13 +67,16 @@ class ClockMap:
         nominal_us = 1e6 / nominal_rate
 
         slope = nominal_us
+        fitted = False
+        raw_ppm = None
         if n.size >= 10 and np.ptp(n) > nominal_rate:  # at least ~1 s of data
-            slope, _ = np.polyfit(n, t, 1)
+            raw, _ = np.polyfit(n, t, 1)
+            raw_ppm = float((nominal_us / raw - 1.0) * 1e6)
             # Outside a sane range means the timing data is bad; trust nominal.
-            if abs(slope / nominal_us - 1.0) * 1e6 > max_drift_ppm:
-                slope = nominal_us
+            if abs(raw_ppm) <= max_drift_ppm:
+                slope, fitted = float(raw), True
 
         residual = t - n * slope
         origin = float(np.percentile(residual, envelope_percentile))
         jitter = float(np.percentile(residual, 95) - origin)
-        return cls(origin, float(slope), nominal_rate, jitter, int(n.size))
+        return cls(origin, float(slope), nominal_rate, jitter, int(n.size), fitted, raw_ppm)

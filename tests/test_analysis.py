@@ -96,3 +96,31 @@ def test_clock_drift_is_corrected_by_fitted_map():
     res = analyse(rec, rate, clock, sched, STREAM_START_US, AnalysisOptions())
     relative = res["b"].median_ms - res["a"].median_ms
     assert relative == pytest.approx(40.0, abs=0.2)
+
+
+def _emissions(pid, delays, snr=30.0):
+    from sendspin_syncer.analysis import EmissionResult
+
+    return [EmissionResult(pid, i, 0, d, snr, True) for i, d in enumerate(delays)]
+
+
+def test_real_player_wander_is_kept_but_wrong_peaks_are_not():
+    """From a real run: chirps a few ms apart are all genuine."""
+    from sendspin_syncer.analysis import PlayerResult, _aggregate
+
+    desktop = PlayerResult(
+        "desktop", _emissions("desktop", [250.26, 252.0, 254.06, 247.58, 245.51])
+    )
+    living = PlayerResult("living", _emissions("living", [-26.62, -26.7, -27.81, -28.02, -30.46]))
+    for pr in (desktop, living):
+        _aggregate(pr, AnalysisOptions())
+        assert pr.detected_count == 5
+    assert desktop.median_ms == pytest.approx(250.26)
+    assert desktop.confidence == "medium"  # its own timing wanders ±3 ms
+    assert living.confidence == "high"
+
+    # A reflection or noise pick far from the rest is still rejected.
+    noisy = PlayerResult("n", _emissions("n", [40.1, 40.3, 39.8, 87.0, 40.0]))
+    _aggregate(noisy, AnalysisOptions())
+    assert noisy.detected_count == 4
+    assert noisy.median_ms == pytest.approx(40.05)

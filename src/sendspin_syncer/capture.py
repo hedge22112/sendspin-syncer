@@ -127,6 +127,8 @@ class Recording:
     overflows: int = 0
     gaps_ms: float = 0.0
     """Audio lost by the driver, replaced with silence to keep the timeline."""
+    timing_source: str = ""
+    segments: int = 1
 
 
 class Recorder(Protocol):
@@ -246,6 +248,8 @@ class SoundDeviceRecorder:
             self.device.describe(),
             self._overflows,
             gap_samples / self.sample_rate * 1000,
+            "driver timestamps" if self._adc_usable else "callback times",
+            1 + sum(breaks[1:]),
         )
 
 
@@ -277,7 +281,8 @@ def assemble(
         seg_idx.append(np.concatenate([[0], np.cumsum(lengths)[:-1]]).astype(np.float64))
         seg_obs.append(np.array([obs_us[i] for i in seg], dtype=np.float64))
 
-    slope = _pooled_slope(seg_idx, seg_obs, sample_rate) or 1e6 / sample_rate
+    fitted_slope, raw_ppm = _pooled_slope(seg_idx, seg_obs, sample_rate)
+    slope = fitted_slope or 1e6 / sample_rate
     origins = [
         float(np.percentile(o - n * slope, 5.0)) for n, o in zip(seg_idx, seg_obs, strict=True)
     ]
@@ -303,14 +308,20 @@ def assemble(
     all_obs = np.concatenate(seg_obs)
     residual = all_obs - all_idx * slope
     jitter = float(np.percentile(residual, 95) - np.percentile(residual, 5))
-    clock = ClockMap(first, slope, sample_rate, jitter, int(all_obs.size))
+    clock = ClockMap(
+        first, slope, sample_rate, jitter, int(all_obs.size), fitted_slope is not None, raw_ppm
+    )
     return samples, clock, gap_total
 
 
 def _pooled_slope(
     seg_idx: list[np.ndarray], seg_obs: list[np.ndarray], sample_rate: int
-) -> float | None:
-    """Microseconds per sample, fitted within segments (each with its own offset)."""
+) -> tuple[float | None, float | None]:
+    """Microseconds per sample, fitted within segments (each with its own offset).
+
+    Returns ``(slope, raw_drift_ppm)``; the slope is ``None`` when there is too
+    little data or the fit is implausible.
+    """
     num = den = span = 0.0
     for n, o in zip(seg_idx, seg_obs, strict=True):
         if n.size < 3:
@@ -320,10 +331,11 @@ def _pooled_slope(
         den += float(np.dot(dn, dn))
         span += float(np.ptp(n))
     if den == 0 or span < sample_rate:  # need at least ~1 s of data
-        return None
+        return None, None
     slope = num / den
+    raw_ppm = (1e6 / sample_rate / slope - 1.0) * 1e6
     # Outside a sane range means the timing data is bad; trust nominal.
-    return slope if abs(slope * sample_rate / 1e6 - 1.0) * 1e6 <= 2000 else None
+    return (slope if abs(raw_ppm) <= 2000 else None), float(raw_ppm)
 
 
 @dataclass(frozen=True, slots=True)

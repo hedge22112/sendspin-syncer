@@ -62,8 +62,12 @@ class AnalysisOptions:
     max_late_s: float = 1.0
     # Pure noise peaks at roughly 11-12 dB above the median of a 1 s window.
     min_snr_db: float = 14.0
-    # Detections further than this from the player's median are discarded.
-    outlier_ms: float = 2.0
+    # Chirps within this window of each other are taken to be the same arrival.
+    # Real players wander by a few ms between chirps (their sync corrections);
+    # a wrong peak (a reflection, or noise) is usually much further off.
+    cluster_ms: float = 15.0
+    # Detections are kept within max(this, 4 x the robust spread) of the median.
+    min_outlier_ms: float = 5.0
 
 
 def bandpass(x: np.ndarray, sample_rate: int, f_lo: float, f_hi: float) -> np.ndarray:
@@ -180,10 +184,13 @@ def _aggregate(pr: PlayerResult, opts: AnalysisOptions) -> None:
     if not good:
         pr.confidence = "none"
         return
-    centre = _densest_delay(good, opts.outlier_ms)
+    centre = _densest_delay(good, opts.cluster_ms)
+    group = np.array([e.delay_ms for e in good if abs(e.delay_ms - centre) <= opts.cluster_ms])
+    mad = float(np.median(np.abs(group - np.median(group))))
+    tolerance = max(opts.min_outlier_ms, 4 * 1.4826 * mad)
     # Drop detections that latched onto the wrong peak (or onto noise).
     for i, e in enumerate(pr.emissions):
-        if e.accepted and e.delay_ms is not None and abs(e.delay_ms - centre) > opts.outlier_ms:
+        if e.accepted and e.delay_ms is not None and abs(e.delay_ms - centre) > tolerance:
             pr.emissions[i] = EmissionResult(
                 e.player_id, e.repeat, e.expected_us, e.delay_ms, e.snr_db, False, "outlier"
             )
@@ -213,10 +220,16 @@ def _densest_delay(detections: list[EmissionResult], tolerance_ms: float) -> flo
 
 
 def _confidence(snr_db: float, spread_ms: float | None, kept: int, total: int) -> str:
+    """How much to trust a player's median delay.
+
+    Mostly about detection: were the chirps heard clearly and consistently?
+    A player whose own timing wanders by a few ms between chirps still gets a
+    trustworthy median, but drops a grade.
+    """
     fraction = kept / total if total else 0.0
     spread = spread_ms if spread_ms is not None else float("inf")
-    if snr_db >= 20 and spread <= 1.0 and fraction >= 0.8 and kept >= 3:
+    if snr_db >= 20 and spread <= 3.0 and fraction >= 0.8 and kept >= 3:
         return "high"
-    if snr_db >= 14 and spread <= 3.0 and fraction >= 0.5 and kept >= 2:
+    if snr_db >= 14 and spread <= 10.0 and fraction >= 0.5 and kept >= 2:
         return "medium"
     return "low"

@@ -68,7 +68,7 @@ class VirtualRoom:
         return Recording(
             rec.astype(np.float32),
             self.sample_rate,
-            ClockMap.nominal(self._origin_us, self.sample_rate),
+            ClockMap(self._origin_us, 1e6 / self.sample_rate, self.sample_rate, fitted=True),
             "virtual microphone",
         )
 

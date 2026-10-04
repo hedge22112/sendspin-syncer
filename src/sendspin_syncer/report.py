@@ -152,6 +152,14 @@ def build_report(
             "device": recording.device,
             "sample_rate": recording.sample_rate,
             "clock_drift_ppm": round(recording.clock.drift_ppm, 1),
+            "clock_fitted": recording.clock.fitted,
+            "raw_drift_ppm": (
+                None
+                if recording.clock.raw_drift_ppm is None
+                else round(recording.clock.raw_drift_ppm, 1)
+            ),
+            "timing_source": recording.timing_source,
+            "segments": recording.segments,
             "callback_jitter_ms": round(recording.clock.jitter_us / 1000, 2),
             "overflows": recording.overflows,
             "audio_lost_ms": round(recording.gaps_ms, 1),
@@ -259,9 +267,15 @@ def print_report(
 
     mic = report.microphone
     if mic:
+        if mic.get("clock_fitted", True):
+            drift = f"clock drift {mic['clock_drift_ppm']:+.0f} ppm"
+        elif mic.get("raw_drift_ppm") is not None:
+            drift = f"clock drift not measured (timing looked like {mic['raw_drift_ppm']:+.0f} ppm)"
+        else:
+            drift = "clock drift not measured"
+        source = f", {mic['timing_source']}" if mic.get("timing_source") else ""
         console.print(
-            f"[dim]Microphone: {mic['device']} @ {mic['sample_rate']} Hz, "
-            f"clock drift {mic['clock_drift_ppm']} ppm, "
+            f"[dim]Microphone: {mic['device']} @ {mic['sample_rate']} Hz, {drift}{source}, "
             f"{report.mode} mode × {report.repeats} repeats.[/]"
         )
     console.print(
