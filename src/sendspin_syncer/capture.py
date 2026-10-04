@@ -125,6 +125,8 @@ class Recording:
     clock: ClockMap
     device: str
     overflows: int = 0
+    gaps_ms: float = 0.0
+    """Audio lost by the driver, replaced with silence to keep the timeline."""
 
 
 class Recorder(Protocol):
@@ -151,7 +153,7 @@ class SoundDeviceRecorder:
         *,
         channel: int = 1,
         sample_rate: int | None = None,
-        blocksize: int = 480,
+        blocksize: int = 0,
     ) -> None:
         if not 1 <= channel <= device.channels:
             raise DeviceError(
@@ -163,19 +165,20 @@ class SoundDeviceRecorder:
         self._channel = channel
         self.sample_rate = sample_rate or pick_sample_rate(device, channel)
         self._blocksize = blocksize
+        self._us_per_sample = 1e6 / self.sample_rate
         self._blocks: list[np.ndarray] = []
-        self._obs_index: list[int] = []
         self._obs_us: list[float] = []
-        self._frames = 0
+        self._breaks: list[bool] = []
         self._overflows = 0
+        self._last_capture_us: float | None = None
+        self._last_frames = 0
         self._lock = threading.Lock()
         self._stream: Any = None
         self._adc_usable: bool | None = None
 
     def _callback(self, indata: np.ndarray, frames: int, t: Any, status: Any) -> None:
         now = self._now_us()
-        if status and status.input_overflow:
-            self._overflows += 1
+        overflow = bool(status and status.input_overflow)
         # How long ago the first sample of this block hit the ADC. PortAudio
         # gives this on most host APIs; when it doesn't (zero or nonsense),
         # assume the block was handed over the moment its last sample arrived.
@@ -184,14 +187,29 @@ class SoundDeviceRecorder:
             self._adc_usable = t.inputBufferAdcTime > 0 and 0 <= age_s < 1.0
         if not self._adc_usable or not 0 <= age_s < 1.0:
             age_s = frames / self.sample_rate
+        capture_us = now - age_s * 1e6
+        # Some drivers hand over NaN/inf garbage; never let it reach the maths.
+        block = np.nan_to_num(indata[:, self._channel - 1], nan=0.0, posinf=0.0, neginf=0.0)
         with self._lock:
-            # Some drivers hand over NaN/inf garbage; never let it reach the maths.
-            self._blocks.append(
-                np.nan_to_num(indata[:, self._channel - 1], nan=0.0, posinf=0.0, neginf=0.0)
-            )
-            self._obs_index.append(self._frames)
-            self._obs_us.append(now - age_s * 1e6)
-            self._frames += frames
+            if overflow:
+                self._overflows += 1
+            self._breaks.append(self._is_dropout(capture_us, frames, overflow))
+            self._blocks.append(block)
+            self._obs_us.append(capture_us)
+            self._last_capture_us = capture_us
+            self._last_frames = frames
+
+    def _is_dropout(self, capture_us: float, frames: int, overflow: bool) -> bool:
+        """Whether audio was lost just before this block."""
+        if self._last_capture_us is None:
+            return False
+        expected_us = self._last_capture_us + self._last_frames * self._us_per_sample
+        gap_us = capture_us - expected_us
+        block_us = max(frames, self._last_frames) * self._us_per_sample
+        # A flagged overflow is trusted from half a block up. Without a flag,
+        # only a jump far beyond normal callback jitter counts as a loss.
+        unflagged_limit = max(4 * block_us, 2 * block_us if self._adc_usable else 50_000)
+        return (overflow and gap_us > 0.5 * block_us) or gap_us > unflagged_limit
 
     def start(self) -> None:
         sd = _sd()
@@ -202,7 +220,9 @@ class SoundDeviceRecorder:
                 samplerate=self.sample_rate,
                 blocksize=self._blocksize,
                 dtype="float32",
-                latency="low",
+                # Timing comes from the per-block timestamps, so there's no
+                # need for low latency; big buffers make dropouts much rarer.
+                latency="high",
                 callback=self._callback,
             )
             self._stream.start()
@@ -215,15 +235,95 @@ class SoundDeviceRecorder:
             self._stream.close()
             self._stream = None
         with self._lock:
-            samples = (
-                np.concatenate(self._blocks) if self._blocks else np.zeros(0, dtype=np.float32)
-            )
-            idx = np.array(self._obs_index)
-            obs = np.array(self._obs_us)
-        if idx.size == 0:
+            blocks, obs, breaks = list(self._blocks), list(self._obs_us), list(self._breaks)
+        if not blocks:
             raise DeviceError(f"{self.device.describe()} delivered no audio")
-        clock = ClockMap.fit(idx, obs, self.sample_rate)
-        return Recording(samples, self.sample_rate, clock, self.device.describe(), self._overflows)
+        samples, clock, gap_samples = assemble(blocks, obs, breaks, self.sample_rate)
+        return Recording(
+            samples,
+            self.sample_rate,
+            clock,
+            self.device.describe(),
+            self._overflows,
+            gap_samples / self.sample_rate * 1000,
+        )
+
+
+def assemble(
+    blocks: list[np.ndarray],
+    obs_us: list[float],
+    breaks: list[bool],
+    sample_rate: int,
+) -> tuple[np.ndarray, ClockMap, int]:
+    """Stitch recorded blocks into one timeline, filling dropouts with silence.
+
+    The blocks between two dropouts form a segment with no missing samples.
+    Each segment is placed using all of its own timestamps (the least-delayed
+    ones, as in :class:`ClockMap`), so a mistake in one gap's length can't
+    shift the segments after it. Without this, every dropout would move the
+    rest of the recording earlier, and later chirps would be searched for in
+    the wrong place.
+    """
+    segments: list[list[int]] = [[]]
+    for i, brk in enumerate(breaks):
+        if brk and segments[-1]:
+            segments.append([])
+        segments[-1].append(i)
+
+    seg_idx: list[np.ndarray] = []
+    seg_obs: list[np.ndarray] = []
+    for seg in segments:
+        lengths = np.array([len(blocks[i]) for i in seg])
+        seg_idx.append(np.concatenate([[0], np.cumsum(lengths)[:-1]]).astype(np.float64))
+        seg_obs.append(np.array([obs_us[i] for i in seg], dtype=np.float64))
+
+    slope = _pooled_slope(seg_idx, seg_obs, sample_rate) or 1e6 / sample_rate
+    origins = [
+        float(np.percentile(o - n * slope, 5.0)) for n, o in zip(seg_idx, seg_obs, strict=True)
+    ]
+    first = origins[0]
+    parts: list[np.ndarray] = []
+    starts: list[int] = []
+    pos = 0
+    gap_total = 0
+    for seg, origin in zip(segments, origins, strict=True):
+        start = round((origin - first) / slope)
+        if start > pos:
+            parts.append(np.zeros(start - pos, dtype=np.float32))
+            gap_total += start - pos
+            pos = start
+        # A segment estimated to overlap the previous one is butted up to it.
+        starts.append(pos)
+        for i in seg:
+            parts.append(np.asarray(blocks[i], dtype=np.float32))
+            pos += len(blocks[i])
+    samples = np.concatenate(parts)
+
+    all_idx = np.concatenate([n + st for n, st in zip(seg_idx, starts, strict=True)])
+    all_obs = np.concatenate(seg_obs)
+    residual = all_obs - all_idx * slope
+    jitter = float(np.percentile(residual, 95) - np.percentile(residual, 5))
+    clock = ClockMap(first, slope, sample_rate, jitter, int(all_obs.size))
+    return samples, clock, gap_total
+
+
+def _pooled_slope(
+    seg_idx: list[np.ndarray], seg_obs: list[np.ndarray], sample_rate: int
+) -> float | None:
+    """Microseconds per sample, fitted within segments (each with its own offset)."""
+    num = den = span = 0.0
+    for n, o in zip(seg_idx, seg_obs, strict=True):
+        if n.size < 3:
+            continue
+        dn = n - n.mean()
+        num += float(np.dot(dn, o - o.mean()))
+        den += float(np.dot(dn, dn))
+        span += float(np.ptp(n))
+    if den == 0 or span < sample_rate:  # need at least ~1 s of data
+        return None
+    slope = num / den
+    # Outside a sane range means the timing data is bad; trust nominal.
+    return slope if abs(slope * sample_rate / 1e6 - 1.0) * 1e6 <= 2000 else None
 
 
 @dataclass(frozen=True, slots=True)

@@ -42,6 +42,7 @@ class PlayerRow:
     confidence: str = "none"
     suggested_output_delay_ms: int | None = None
     is_reference: bool = False
+    chirps: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -106,6 +107,16 @@ def build_report(
             row.status = "ok"
         if res is not None:
             row.detections = f"{res.detected_count}/{len(res.emissions)}"
+            row.chirps = [
+                {
+                    "repeat": e.repeat,
+                    "delay_ms": None if e.delay_ms is None else round(e.delay_ms, 3),
+                    "snr_db": round(e.snr_db, 1),
+                    "used": e.accepted,
+                    "reason": e.reason,
+                }
+                for e in res.emissions
+            ]
             row.confidence = res.confidence
             row.spread_ms = res.spread_ms
             row.snr_db = res.snr_db
@@ -143,6 +154,7 @@ def build_report(
             "clock_drift_ppm": round(recording.clock.drift_ppm, 1),
             "callback_jitter_ms": round(recording.clock.jitter_us / 1000, 2),
             "overflows": recording.overflows,
+            "audio_lost_ms": round(recording.gaps_ms, 1),
             "seconds": round(len(recording.samples) / recording.sample_rate, 1),
         }
     report = Report(
@@ -160,7 +172,15 @@ def build_report(
         )
     if recording is not None and recording.overflows:
         report.notes.append(
-            f"The microphone dropped audio {recording.overflows} time(s); results may be off."
+            f"The microphone dropped audio {recording.overflows} time(s) "
+            f"({recording.gaps_ms:.0f} ms in total). The gaps were filled with silence so the "
+            "timing stays correct, but chirps that fell into a gap are lost. If this keeps "
+            "happening, close other audio apps or try another USB port."
+        )
+    if any(r.confidence == "low" for r in rows):
+        report.notes.append(
+            "Low confidence: few chirps agreed. Try a louder volume, the mic closer, a quieter "
+            "room or more --repeats; run with -v to see every chirp."
         )
     return report
 
@@ -202,7 +222,9 @@ def _fmt_ms(v: float | None, signed: bool = False) -> str:
     return f"{v:+.1f} ms" if signed else f"{v:.1f} ms"
 
 
-def print_report(report: Report, console: Console | None = None, *, hints: bool = True) -> None:
+def print_report(
+    report: Report, console: Console | None = None, *, hints: bool = True, details: bool = False
+) -> None:
     console = console or Console()
     table = Table(title="Sendspin player delays", title_style="bold", show_lines=False)
     table.add_column("Player", style="bold", ratio=3)
@@ -232,6 +254,8 @@ def print_report(report: Report, console: Console | None = None, *, hints: bool 
             f"[{status_style}]{status}[/]",
         )
     console.print(table)
+    if details:
+        _print_chirps(report, console)
 
     mic = report.microphone
     if mic:
@@ -264,6 +288,18 @@ def print_report(report: Report, console: Console | None = None, *, hints: bool 
                 console.print(
                     f"  • {r.name}: {current} ms → [bold]{r.suggested_output_delay_ms} ms[/]"
                 )
+
+
+def _print_chirps(report: Report, console: Console) -> None:
+    """One line per chirp: what was detected and whether it was used."""
+    for r in report.rows:
+        if not r.chirps:
+            continue
+        console.print(f"[bold]{r.name}[/] chirps:")
+        for c in r.chirps:
+            delay = "not found" if c["delay_ms"] is None else f"{c['delay_ms']:+8.2f} ms"
+            used = "[green]used[/]" if c["used"] else f"[red]dropped[/] ({c['reason']})"
+            console.print(f"  #{c['repeat'] + 1}: {delay}  SNR {c['snr_db']:5.1f} dB  {used}")
 
 
 def write_json(report: Report, path: Path) -> None:

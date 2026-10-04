@@ -73,7 +73,13 @@ mic response. Any colouring the mic adds is the same for every player, so it
 cancels out. Mics that only record at 16 kHz (common for webcams and headsets)
 are handled too: the sweeps are kept below what they can capture. If a
 player still comes out *low* confidence or *no signal*: raise its volume, move
-the mic closer, quieten the room, or add `--repeats 9`.
+the mic closer, quieten the room, or add `--repeats 9`. Adding `-v` lists
+every chirp, so you can see why some were dropped.
+
+USB mics sometimes drop a little audio while the test runs, and the report
+then notes it. The recorder notices each dropout and fills it with silence
+of the right length, so later chirps keep their correct time. Only a chirp
+that falls into a gap is lost.
 
 ### 2. See which players are around
 
@@ -108,6 +114,7 @@ Useful options:
 | `--json PATH`, `--csv PATH` | Save the report |
 | `--save-recording WAV` | Keep the raw recording for inspection |
 | `--no-hints` | Hide the alignment suggestions |
+| `-v` | Also list every chirp: its delay, SNR and whether it was used |
 | `-y` | Don't ask for confirmation |
 
 A run takes about `players × repeats × 1.8 s` (30 s for 3 players), or

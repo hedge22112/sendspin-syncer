@@ -58,6 +58,10 @@ def test_measure_arguments():
     )
     assert args.player == ["kitchen", "lounge"]
     assert args.device == "umik" and args.repeats == 7 and args.simultaneous and args.yes
+    assert args.verbose == 0
+    assert build_parser().parse_args(["measure", "-v"]).verbose == 1
+    assert build_parser().parse_args(["measure", "-vv"]).verbose == 2
+    assert build_parser().parse_args(["-v", "measure"]).verbose == 1
 
 
 def test_select_players_and_urls():

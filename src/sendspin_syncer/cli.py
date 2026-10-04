@@ -261,7 +261,7 @@ async def _measure(args: argparse.Namespace) -> int:
         reference=args.reference,
     )
     console.print()
-    print_report(report, console, hints=not args.no_hints)
+    print_report(report, console, hints=not args.no_hints, details=args.verbose > 0)
     if args.json:
         write_json(report, Path(args.json))
         console.print(f"JSON report written to {args.json}")
@@ -414,6 +414,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json", metavar="PATH", help="also write the report as JSON")
     g.add_argument("--csv", metavar="PATH", help="also write the report as CSV")
     g.add_argument("--no-hints", action="store_true", help="don't print alignment suggestions")
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=argparse.SUPPRESS,
+        help="show every chirp's result (and more logging with -vv)",
+    )
     p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("selftest", help="check the pipeline with simulated players (no hardware)")
